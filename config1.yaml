@@ -1,0 +1,94 @@
+# -----------------------------------------------------------------
+# QML EXPERIMENT CONFIGURATION
+# This is your main control panel.
+# -----------------------------------------------------------------
+
+# --- MLflow Configuration ---
+mlflow:
+  # For local runs:
+  tracking_uri: "./mlruns"
+  # For AWS runs, change to your central server:
+  # tracking_uri: "http://<your-aws-mlflow-server-ip>:5000" 
+  experiment_name: "QML_Atari_DQN_v2"
+
+# --- Shared Environment ---
+environment:
+  env_name: "CartPole-v1"
+
+# --- Shared Device Preference ---
+global_device:
+  preference: "auto" # 'auto' | 'cuda' | 'mps' | 'cpu'
+
+# --- Shared Training Hyperparameters ---
+global_training:
+  episodes: 500
+  lr: 0.001
+  buffer_size: 10000
+  batch_size: 32
+  gamma: 0.99
+  epsilon_start: 1.0
+  epsilon_end: 0.01
+  epsilon_decay: 0.995
+  target_update: 10
+  seed: 42
+
+# -----------------------------------------------------------------
+#  EXPERIMENT DEFINITIONS
+# 'run.py' will execute EVERY experiment in this list.
+# -----------------------------------------------------------------
+experiments:
+
+  - run_name: "classical_baseline"
+    model:
+      type: "classical"
+      hidden_dim: 16
+    # Gradient method is not needed for classical
+    gradient:
+      method: "backprop"
+
+  - run_name: "pennylane_hybrid_adjoint"
+    model:
+      type: "pennylane_hybrid"
+      n_qubits: 4
+      n_layers: 2
+      encoder_hidden_dim: 8
+      decoder_hidden_dim: 8
+    gradient:
+      # This is an 'autograd_native' method.
+      # PennyLane's Torch interface handles it.
+      method: "adjoint"
+
+  - run_name: "tensorcircuit_hybrid_backprop"
+    model:
+      type: "tensorcircuit_hybrid"
+      n_qubits: 4
+      n_layers: 2
+      encoder_hidden_dim: 8
+      decoder_hidden_dim: 8
+    gradient:
+      # This is 'autograd_native' via PyTorch.
+      method: "backprop" # or "adjoint"
+
+  - run_name: "pennylane_basic_spsa"
+    model:
+      type: "pennylane_basic"
+      n_qubits: 4
+      n_layers: 2
+    gradient:
+      # This is a 'manual' method.
+      method: "spsa"
+      # SPSA-specific hyperparameters
+      spsa_c: 0.01  # Perturbation size
+      spsa_a: 0.602
+      spsa_A: 1.0
+      spsa_gamma: 0.101
+
+  - run_name: "tensorcircuit_basic_finite_diff"
+    model:
+      type: "tensorcircuit_basic"
+      n_qubits: 4
+      n_layers: 2
+    gradient:
+      # This is a 'manual' method.
+      method: "finite-diff"
+      fd_epsilon: 1.0e-5 # Epsilon for finite differences

@@ -1,0 +1,88 @@
+# -----------------------------------------------------------------
+# QML LOCAL SMOKE TEST (M1 Mac)
+# Goal: Run fast, use low RAM, and test all code paths.
+# -----------------------------------------------------------------
+
+# --- MLflow Configuration ---
+mlflow:
+  tracking_uri: "./mlruns"
+  experiment_name: "QML_Atari_LOCAL_TEST" # Separate from your real runs
+
+# --- Shared Environment ---
+environment:
+  env_name: "CartPole-v1"
+
+# --- Shared Device Preference ---
+global_device:
+  # 'auto' will find your M1 'mps' device automatically
+  preference: "auto" 
+
+# --- Shared Training Hyperparameters ---
+# *** These are set very low for a quick test ***
+global_training:
+  episodes: 10        # Run for only 10 episodes (down from 500)
+  lr: 0.001
+  buffer_size: 1000   # Use a small buffer for low RAM (down from 10000)
+  batch_size: 32
+  gamma: 0.99
+  epsilon_start: 1.0
+  epsilon_end: 0.01
+  epsilon_decay: 0.995
+  target_update: 5    # Update target net quickly
+  seed: 42
+
+# -----------------------------------------------------------------
+#  EXPERIMENT TEST MATRIX
+#  This list tests one of every major combination.
+# -----------------------------------------------------------------
+experiments:
+
+  # # 1. Classical + Autograd (backprop)
+  # - run_name: "local_test_classical"
+  #   model:
+  #     type: "classical"
+  #     hidden_dim: 16
+  #   gradient:
+  #     method: "backprop"
+
+  # # 2. PennyLane + Autograd (adjoint)
+  # - run_name: "local_test_pl_basic_adjoint"
+  #   model:
+  #     type: "pennylane_basic"
+  #     n_qubits: 4
+  #     n_layers: 2
+  #   gradient:
+  #     method: "adjoint"
+
+  # 3. TensorCircuit + Autograd (backprop)
+  - run_name: "local_test_tc_basic_backprop"
+    model:
+      type: "tensorcircuit_basic"
+      n_qubits: 4
+      n_layers: 2
+    gradient:
+      method: "backprop"
+
+  # 4. PennyLane + Manual Grad (spsa)
+  - run_name: "local_test_pl_hybrid_spsa"
+    model:
+      type: "pennylane_hybrid"
+      n_qubits: 4
+      n_layers: 2
+      encoder_hidden_dim: 8
+      decoder_hidden_dim: 8
+    gradient:
+      method: "spsa"
+      spsa_c: 0.01 
+
+  # 5. TensorCircuit + Manual Grad (finite-diff)
+  - run_name: "local_test_tc_hybrid_finite_diff"
+    model:
+      type: "tensorcircuit_hybrid"
+      n_qubits: 4
+      n_layers: 2
+      encoder_hidden_dim: 8
+      decoder_hidden_dim: 8
+    gradient:
+      method: "finite-diff"
+      fd_epsilon: 1.0e-5
