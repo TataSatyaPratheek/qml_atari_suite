@@ -1,52 +1,71 @@
-# QML Atari - Lean Experiment Framework (v2)
+# QML Atari Experiment Framework
 
-This repository implements a modular, MLflow-tracked framework for QML-RL experiments. It supports multiple backends (PennyLane, TensorCircuit) and multiple gradient strategies (backprop, adjoint, parameter-shift, SPSA, finite-diff) from a single configuration file.
+**TLDR:** This repository is a scalable, MLflow-tracked framework to benchmark quantum reinforcement learning models. It directly compares PennyLane and TensorCircuit backends on the CartPole-v1 task. The framework is designed for "apples-to-apples" comparisons by supporting multiple gradient methods (backprop, adjoint, parameter-shift, spsa, finite-diff) across both QML libraries.
 
-## 🚀 Your Workflow
+## Core Framework
 
-Your entire workflow is focused on three files:
+This project is no longer a single script; it is a modular experiment runner:
 
-1.  **`config.yaml`**: Define *what* to run. Add experiments, change models, and select gradient methods here.
-2.  **`models.py`**: Define *how* models are built. Add new `nn.Module` classes for your new QML circuits (either PennyLane or TensorCircuit).
-3.  **`gradients.py`**: Define new *manual* gradient logic. If you invent a new SPSA-like method, add it here.
+- `config.yaml`: Your main "control panel." Define all experiments, models, and parameters here.
+- `run.py`: The single entry point. It reads `config.yaml`, loops through all experiments, and handles errors/timeouts.
+- `train.py`: The core training loop. It automatically switches between native autograd (`loss.backward()`) and manual gradient calculation.
+- `gradients.py`: Implements manual gradient methods (SPSA, Finite-Difference) in a backend-agnostic way.
+- `models.py`: The "QML lab." All model architectures (Classical, PennyLane, TensorCircuit) are defined here.
+- `utils.py`: Handles device setup (MPS/CUDA/CPU) and the model factory.
+- `mlruns/`: All results (metrics, parameters, status) are logged here.
 
-### How to Run
+## Smoke Test Results (5 Episodes @ 4 Qubits)
 
-1.  **Install Dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+Our initial smoke test on an M1 Mac (MPS device) revealed critical performance differences:
 
-2.  **Configure Experiments:**
-    Open `config.yaml` and edit the `experiments:` list. You can add new runs, change `model: type` (e.g., `pennylane_basic`, `tensorcircuit_hybrid`) and `gradient: method` (e.g., `adjoint`, `backprop`, `spsa`).
+| Run Name | Backend | Gradient | Status | Time (s) |
+|----------|---------|----------|--------|----------|
+| smoke_test_classical | Classical | backprop | PASSED | 1.33 |
+| smoke_test_pl_hybrid_adjoint | PennyLane | adjoint | PASSED | 56.95 |
+| smoke_test_tc_hybrid_backprop | TensorCircuit | backprop | PASSED | 1.86 |
+| smoke_test_pl_hybrid_spsa | PennyLane | spsa | PASSED | 64.43 |
+| smoke_test_tc_hybrid_spsa | TensorCircuit | spsa | PASSED | 2.42 |
+| smoke_test_pl_hybrid_param_shift | PennyLane | param-shift | FAILED | 0.70 |
+| smoke_test_pl_hybrid_finite_diff | PennyLane | finite-diff | TIMED OUT | 150.2 |
+| smoke_test_tc_hybrid_finite_diff | TensorCircuit | finite-diff | TIMED OUT | 150.0 |
 
-3.  **Run All Experiments:**
-    ```bash
-    python run.py
-    ```
+## Key Findings (TLDR)
 
-4.  **View Results:**
-    All metrics, parameters, and configs are logged to MLflow.
-    ```bash
-    mlflow ui
-    ```
-    Then open `http://127.0.0.1:5000` in your browser.
+- **TensorCircuit is ~30x Faster**: For native autograd, tensorcircuit (backprop, 1.86s) is 30 times faster than pennylane (adjoint, 56.95s).
+- **SPSA Speed**: The speed difference holds for manual methods. tensorcircuit (2.42s) is 26 times faster than pennylane (64.43s). This suggests PennyLane's QNode overhead is the main bottleneck.
+- **PennyLane Limitation**: The parameter-shift method failed due to a known PennyLane limitation with batched inputs ("broadcasted tapes"). This is a critical finding for our framework.
+- **finite-diff is Unusable**: The finite-diff method is computationally infeasible and timed out for both backends, as expected.
 
-### 🛰️ How to Run on AWS (Multi-Instance)
+## How to Run
 
-This framework is built for parallel AWS runs.
+### Install Dependencies
 
-1.  **Set up a central MLflow server** on a small EC2 instance and get its public IP (e.g., `34.22.11.4`).
-2.  In your local `config.yaml`, change the `tracking_uri`:
-    ```yaml
-    mlflow:
-      tracking_uri: "[http://34.22.11.4:5000](http://34.22.11.4:5000)"
-    ```
-3.  **Create different configs for each worker:**
-    * `config_worker_1.yaml`: Contains experiments 1-5.
-    * `config_worker_2.yaml`: Contains experiments 6-10.
-4.  **Launch your AWS GPU instances:**
-    * On **Worker 1**, upload `config_worker_1.yaml` (rename it to `config.yaml`) and the rest of the code. Run `python run.py`.
-    * On **Worker 2**, upload `config_worker_2.yaml` (rename it to `config.yaml`) and the rest of the code. Run `python run.py`.
+```bash
+pip install -r requirements.txt
+```
 
-All instances will automatically log their results to your central MLflow server.
+### Run Experiments
+
+Modify `config.yaml` to define your experiments (e.g., set `episodes: 500` for a production run). Then, simply run:
+
+```bash
+python run.py
+```
+
+### View Results
+
+All metrics, parameters, and run statuses (PASSED, FAILED, TIMED_OUT) are logged to MLflow.
+
+```bash
+mlflow ui
+```
+
+## Possible Research Directions
+
+1. **Production Run (AWS)**: The framework is validated. The immediate next step is to run the "apples-to-apples" config (with `episodes: 500`) on AWS GPU instances to get statistically meaningful learning curves.
+
+2. **Migrate to tensorcircuit-ng**: We've confirmed tensorcircuit is faster. The next logical step is to migrate our `models.py` implementation from tensorcircuit to tensorcircuit-ng (as we discussed) to see if its Keras-like API provides even better performance and a cleaner codebase.
+
+3. **Deeper Gradient Analysis**: Investigate the trade-offs. Does PennyLane's slower adjoint method produce more stable gradients than TensorCircuit's fast backprop? A 500-episode run will answer this.
+
+4. **Scale Up**: Add new, more complex model architectures to `models.py` or change the `env_name` in `config.yaml` to test on more difficult environments. The framework is built to handle it.
