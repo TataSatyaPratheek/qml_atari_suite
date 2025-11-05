@@ -37,22 +37,22 @@ global_training:
 # -----------------------------------------------------------------
 experiments:
 
-  # # 1. Classical + Autograd (backprop)
-  # - run_name: "local_test_classical"
-  #   model:
-  #     type: "classical"
-  #     hidden_dim: 16
-  #   gradient:
-  #     method: "backprop"
+  # 1. Classical + Autograd (backprop)
+  - run_name: "local_test_classical"
+    model:
+      type: "classical"
+      hidden_dim: 16
+    gradient:
+      method: "backprop"
 
-  # # 2. PennyLane + Autograd (adjoint)
-  # - run_name: "local_test_pl_basic_adjoint"
-  #   model:
-  #     type: "pennylane_basic"
-  #     n_qubits: 4
-  #     n_layers: 2
-  #   gradient:
-  #     method: "adjoint"
+  # 2. PennyLane + Autograd (adjoint)
+  - run_name: "local_test_pl_basic_adjoint"
+    model:
+      type: "pennylane_basic"
+      n_qubits: 4
+      n_layers: 2
+    gradient:
+      method: "adjoint"
 
   # 3. TensorCircuit + Autograd (backprop)
   - run_name: "local_test_tc_basic_backprop"
@@ -75,14 +75,14 @@ experiments:
       method: "spsa"
       spsa_c: 0.01 
 
-  # 5. TensorCircuit + Manual Grad (finite-diff)
-  - run_name: "local_test_tc_hybrid_finite_diff"
-    model:
-      type: "tensorcircuit_hybrid"
-      n_qubits: 4
-      n_layers: 2
-      encoder_hidden_dim: 8
-      decoder_hidden_dim: 8
-    gradient:
-      method: "finite-diff"
-      fd_epsilon: 1.0e-5
+  # # 5. TensorCircuit + Manual Grad (finite-diff)
+  # - run_name: "local_test_tc_hybrid_finite_diff"
+  #   model:
+  #     type: "tensorcircuit_hybrid"
+  #     n_qubits: 4
+  #     n_layers: 2
+  #     encoder_hidden_dim: 8
+  #     decoder_hidden_dim: 8
+  #   gradient:
+  #     method: "finite-diff"
+  #     fd_epsilon: 1.0e-5
