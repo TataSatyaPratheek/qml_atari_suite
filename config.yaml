@@ -1,12 +1,14 @@
 # -----------------------------------------------------------------
-# QML LOCAL SMOKE TEST (M1 Mac)
-# Goal: Run fast, use low RAM, and test all code paths.
+# QML FULL SMOKE TEST (Production Codebase)
+#
+# Goal: Run fast, use low RAM, and test every single code path
+# (all models, all gradient methods) before the AWS run.
 # -----------------------------------------------------------------
 
 # --- MLflow Configuration ---
 mlflow:
   tracking_uri: "./mlruns"
-  experiment_name: "QML_Atari_LOCAL_TEST" # Separate from your real runs
+  experiment_name: "QML_Atari_Full_Smoke_Test"
 
 # --- Shared Environment ---
 environment:
@@ -14,75 +16,98 @@ environment:
 
 # --- Shared Device Preference ---
 global_device:
-  # 'auto' will find your M1 'mps' device automatically
-  preference: "auto" 
+  preference: "auto" # 'auto', 'cuda', 'cpu', 'mps'
 
-# --- Shared Training Hyperparameters ---
-# *** These are set very low for a quick test ***
-global_training:
-  episodes: 10        # Run for only 10 episodes (down from 500)
+# --- Shared "Apples-to-Apples" Model Hyperparameters ---
+model_defaults: &model_defaults
+  n_qubits: 4
+  n_layers: 2
+  encoder_hidden_dim: 8
+  decoder_hidden_dim: 8
+
+# --- Shared "Smoke Test" Training Hyperparameters ---
+global_training: &global_training
+  episodes: 5          # <-- Set to 5 for a very fast run
   lr: 0.001
-  buffer_size: 1000   # Use a small buffer for low RAM (down from 10000)
+  buffer_size: 1000     # Low RAM buffer
   batch_size: 32
   gamma: 0.99
   epsilon_start: 1.0
   epsilon_end: 0.01
-  epsilon_decay: 0.995
-  target_update: 5    # Update target net quickly
+  epsilon_decay: 0.995  # This won't matter much in 5 episodes
+  target_update: 2      # Update target net quickly
   seed: 42
 
 # -----------------------------------------------------------------
-#  EXPERIMENT TEST MATRIX
-#  This list tests one of every major combination.
+#  EXPERIMENT DEFINITIONS
 # -----------------------------------------------------------------
+
+# --- Anchor definitions for clean code ---
+grad_backprop: &grad_backprop
+  gradient: { method: "backprop" }
+grad_adjoint: &grad_adjoint
+  gradient: { method: "adjoint" }
+grad_param_shift: &grad_param_shift
+  gradient: { method: "parameter-shift" }
+grad_spsa: &grad_spsa
+  gradient: { method: "spsa", spsa_c: 0.01 }
+grad_finite_diff: &grad_finite_diff
+  gradient: { method: "finite-diff", fd_epsilon: 1.0e-5 }
+
+# ---
 experiments:
 
-  # 1. Classical + Autograd (backprop)
-  - run_name: "local_test_classical"
+  # 1. Classical Baseline
+  - run_name: "smoke_test_classical"
     model:
       type: "classical"
       hidden_dim: 16
-    gradient:
-      method: "backprop"
+    <<: *grad_backprop
 
-  # 2. PennyLane + Autograd (adjoint)
-  - run_name: "local_test_pl_basic_adjoint"
-    model:
-      type: "pennylane_basic"
-      n_qubits: 4
-      n_layers: 2
-    gradient:
-      method: "adjoint"
-
-  # 3. TensorCircuit + Autograd (backprop)
-  - run_name: "local_test_tc_basic_backprop"
-    model:
-      type: "tensorcircuit_basic"
-      n_qubits: 4
-      n_layers: 2
-    gradient:
-      method: "backprop" # This is "autograd-native"
-
-  # 4. PennyLane + Manual Grad (spsa)
-  - run_name: "local_test_pl_hybrid_spsa"
+  # -----------------------------------------------
+  # 2. PennyLane Experiments (Test all 3 paths)
+  # -----------------------------------------------
+  - run_name: "smoke_test_pl_hybrid_adjoint"
     model:
       type: "pennylane_hybrid"
-      n_qubits: 4
-      n_layers: 2
-      encoder_hidden_dim: 8
-      decoder_hidden_dim: 8
-    gradient:
-      method: "spsa"
-      spsa_c: 0.01 
+      <<: *model_defaults
+    <<: *grad_adjoint
 
-  # # 5. TensorCircuit + Manual Grad (finite-diff)
-  # - run_name: "local_test_tc_hybrid_finite_diff"
-  #   model:
-  #     type: "tensorcircuit_hybrid"
-  #     n_qubits: 4
-  #     n_layers: 2
-  #     encoder_hidden_dim: 8
-  #     decoder_hidden_dim: 8
-  #   gradient:
-  #     method: "finite-diff"
-  #     fd_epsilon: 1.0e-5
+  - run_name: "smoke_test_pl_hybrid_param_shift"
+    model:
+      type: "pennylane_hybrid"
+      <<: *model_defaults
+    <<: *grad_param_shift
+  
+  - run_name: "smoke_test_pl_hybrid_spsa"
+    model:
+      type: "pennylane_hybrid"
+      <<: *model_defaults
+    <<: *grad_spsa
+  
+  - run_name: "smoke_test_pl_hybrid_finite_diff"
+    model:
+      type: "pennylane_hybrid"
+      <<: *model_defaults
+    <<: *grad_finite_diff
+  
+  # -----------------------------------------------
+  # 3. TensorCircuit Experiments (Test all 3 paths)
+  # -----------------------------------------------
+  - run_name: "smoke_test_tc_hybrid_backprop"
+    model:
+      type: "tensorcircuit_basic" # Using basic, hybrid will also work
+      <<: *model_defaults
+    <<: *grad_backprop
+
+  - run_name: "smoke_test_tc_hybrid_spsa"
+    model:
+      type: "tensorcircuit_hybrid"
+      <<: *model_defaults
+    <<: *grad_spsa
+  
+  - run_name: "smoke_test_tc_hybrid_finite_diff"
+    model:
+      type: "tensorcircuit_hybrid"
+      <<: *model_defaults
+    <<: *grad_finite_diff

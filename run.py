@@ -11,6 +11,7 @@ from rich.panel import Panel
 
 import utils
 import train
+from exceptions import ExperimentTimeoutError # <-- 1. IMPORT NEW EXCEPTION
 
 def merge_configs(global_cfg, exp_cfg):
     """Merges global config with experiment-specific overrides."""
@@ -32,6 +33,8 @@ def run():
     utils.setup_mlflow(config)
     
     # 3. Load Global Params
+    # --- 2. DEFINE TIMEOUT ---
+    SMOKE_TEST_TIMEOUT = 150.0 # seconds
     global_training_config = config.get('global_training', {})
     global_device_config = config.get('global_device', {})
     env_name = config.get('environment', {}).get('env_name', 'CartPole-v1')
@@ -93,23 +96,56 @@ def run():
                 pl_device_name, tc_backend, grad_cfg
             ).to(torch_device)
             
-            # --- E. Run Training ---
-            print(f"Starting training for [bold]{run_name}[/bold] on [bold]{torch_device}[/bold]...")
-            train.train_agent(
-                model=policy_model,
-                target_model=target_model,
-                env=run_env,
-                device=torch_device,
-                train_config=train_cfg,
-                grad_config=grad_cfg
-            )
-            
-            run_env.close()
-            
-            # --- F. Log Final Time ---
-            total_time = time.time() - start_time
-            mlflow.log_metric("total_training_time_sec", total_time)
-            print(f"[bold green]✓ Finished Experiment[/bold green]: [cyan]{run_name}[/cyan] in [yellow]{total_time:.2f}s[/yellow]")
+            # --- E. Run Training (with Error Handling) ---
+            try:
+                print(f"Starting training for [bold]{run_name}[/bold] on [bold]{torch_device}[/bold]...")
+                train.train_agent(
+                    model=policy_model,
+                    target_model=target_model,
+                    env=run_env,
+                    device=torch_device,
+                    train_config=train_cfg,
+                    grad_config=grad_cfg,
+                    start_time=start_time,
+                    timeout_sec=SMOKE_TEST_TIMEOUT
+                )
+                
+                # --- F. Log Final Time (Success) ---
+                total_time = time.time() - start_time
+                mlflow.log_metric("total_training_time_sec", total_time)
+                mlflow.set_tag("run_status", "COMPLETED")
+                print(f"[bold green]✓ Finished Experiment[/bold green]: [cyan]{run_name}[/cyan] in [yellow]{total_time:.2f}s[/yellow]")
+
+            # --- 4. CATCH THE TIMEOUT SEPARATELY ---
+            except ExperimentTimeoutError as e:
+                # --- F. Log Final Time (Timeout) ---
+                total_time = time.time() - start_time
+                msg = (
+                    f"Run [bold yellow]TIMED OUT[/bold yellow] after {total_time:.1f}s "
+                    f"(limit was {SMOKE_TEST_TIMEOUT}s).\nThis is expected for slow methods "
+                    f"(like finite-diff) on a 5-episode smoke test."
+                )
+                print(Panel(msg, title="[bold yellow]Experiment Timeout[/bold yellow]", border_style="yellow"))
+                mlflow.set_tag("run_status", "TIMED_OUT")
+                mlflow.log_param("error_message", str(e))
+                mlflow.log_metric("total_training_time_sec", total_time)
+
+            except Exception as e:
+                # --- F. Log Final Time (Failure) ---
+                total_time = time.time() - start_time
+                print(Panel(f"Run [bold red]FAILED[/bold red]: {e}", 
+                            title="[bold red]Experiment Error[/bold red]", 
+                            border_style="red", expand=True))
+                
+                # Log failure to MLflow
+                mlflow.set_tag("run_status", "FAILED")
+                error_str = str(e).replace("\n", " ")[:250] # MLflow params have a 250 char limit
+                mlflow.log_param("error_message", error_str)
+                mlflow.log_metric("total_training_time_sec", total_time)
+
+            finally:
+                # Ensure environment is always closed
+                run_env.close()
 
     print(Panel("[bold green]✓ All experiments complete![/bold green]", 
                 subtitle="Run [bold]`mlflow ui`[/bold] to view results.",

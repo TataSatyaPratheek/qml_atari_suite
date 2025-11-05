@@ -6,15 +6,21 @@ import random
 from tqdm import tqdm
 import mlflow
 
+import time # <-- 1. IMPORT TIME
+
 # Import ReplayBuffer and manual gradient functions
 from replay_buffer import ReplayBuffer
 import gradients
+
+# --- 2. DEFINE CUSTOM EXCEPTION ---
+from exceptions import ExperimentTimeoutError
+# ----------------------------------
 
 # Determine which gradient methods are handled by loss.backward()
 # All others will be handled by gradients.py
 AUTOGRAD_NATIVE_METHODS = ['backprop', 'adjoint', 'parameter-shift']
 
-def train_agent(model, target_model, env, device, train_config, grad_config):
+def train_agent(model, target_model, env, device, train_config, grad_config, start_time, timeout_sec): # <-- 3. ADD ARGS
     """
     Generic training function for a DQN agent, integrated with MLflow
     and multiple gradient computation strategies.
@@ -49,6 +55,15 @@ def train_agent(model, target_model, env, device, train_config, grad_config):
     pbar = tqdm(range(episodes), desc=f"Training Run ({grad_method})")
     
     for episode in pbar:
+        # --- 4. ADD TIMEOUT CHECK ---
+        current_duration = time.time() - start_time
+        if current_duration > timeout_sec:
+            raise ExperimentTimeoutError(
+                f"Run exceeded smoke test timeout of {timeout_sec}s "
+                f"(current duration: {current_duration:.1f}s)"
+            )
+        # --- END TIMEOUT CHECK ---
+            
         state, _ = env.reset()
         state = np.array(state, dtype=np.float32)
         episode_reward = 0
@@ -112,7 +127,14 @@ def train_agent(model, target_model, env, device, train_config, grad_config):
                 # Use our manual gradient computation from gradients.py
                 # This is for 'spsa', 'finite-diff', etc.
                 gradients.compute_manual_gradient(
-                    model, loss_fn, states_t, actions_t, target_q, grad_config
+                    model, 
+                    loss_fn, 
+                    states_t, 
+                    actions_t, 
+                    target_q, 
+                    grad_config,
+                    start_time,  # <-- PASS IT DOWN
+                    timeout_sec  # <-- PASS IT DOWN
                 )
 
             # 4. Apply gradients
