@@ -62,6 +62,16 @@ def get_device(preference="auto"):
             print("[yellow]Warning:[default] pennylane-lightning-gpu not found. Falling back to lightning.qubit.")
             pl_device_name = "lightning.qubit"
             
+    # --- Set tc backend ---
+    try:
+        import tensorcircuit as tc
+        tc.set_backend("pytorch")
+        tc.set_dtype("float32") # Use float32 for performance
+        print(f"[bold green]✓[/bold green] Using TensorCircuit Backend: [bold cyan]{tc_backend}[/bold cyan]")
+    except ImportError:
+        print("[yellow]Warning:[default] TensorCircuit not found. Skipping backend setup.")
+    # -------------------------
+            
     print(f"[bold green]✓[/bold green] Using PyTorch Device: [bold cyan]{device}[/bold cyan]")
     print(f"[bold green]✓[/bold green] Using PennyLane Device: [bold cyan]{pl_device_name}[/bold cyan]")
     print(f"[bold green]✓[/bold green] Using TensorCircuit Backend: [bold cyan]{tc_backend}[/bold cyan]")

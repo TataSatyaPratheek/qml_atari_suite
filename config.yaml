@@ -37,22 +37,22 @@ global_training:
 # -----------------------------------------------------------------
 experiments:
 
-  # 1. Classical + Autograd (backprop)
-  - run_name: "local_test_classical"
-    model:
-      type: "classical"
-      hidden_dim: 16
-    gradient:
-      method: "backprop"
+  # # 1. Classical + Autograd (backprop)
+  # - run_name: "local_test_classical"
+  #   model:
+  #     type: "classical"
+  #     hidden_dim: 16
+  #   gradient:
+  #     method: "backprop"
 
-  # 2. PennyLane + Autograd (adjoint)
-  - run_name: "local_test_pl_basic_adjoint"
-    model:
-      type: "pennylane_basic"
-      n_qubits: 4
-      n_layers: 2
-    gradient:
-      method: "adjoint"
+  # # 2. PennyLane + Autograd (adjoint)
+  # - run_name: "local_test_pl_basic_adjoint"
+  #   model:
+  #     type: "pennylane_basic"
+  #     n_qubits: 4
+  #     n_layers: 2
+  #   gradient:
+  #     method: "adjoint"
 
   # 3. TensorCircuit + Autograd (backprop)
   - run_name: "local_test_tc_basic_backprop"
@@ -61,7 +61,7 @@ experiments:
       n_qubits: 4
       n_layers: 2
     gradient:
-      method: "backprop"
+      method: "backprop" # This is "autograd-native"
 
   # 4. PennyLane + Manual Grad (spsa)
   - run_name: "local_test_pl_hybrid_spsa"

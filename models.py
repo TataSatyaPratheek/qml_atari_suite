@@ -146,116 +146,106 @@ class PennyLaneHybridDQN(nn.Module):
 
 if TENSORCIRCUIT_LOADED:
     
-    class TensorCircuitBasicDQN(nn.Module):
-        """Basic quantum approach implemented in TensorCircuit for 'backprop'"""
-        def __init__(self, n_qubits, n_layers, n_actions, grad_method_config, **kwargs):
-            super().__init__()
-            self.n_qubits = n_qubits
+    # --- Keras-style Circuit for Basic DQN ---
+    class BasicCircuitNG(tc.Circuit):
+        def __init__(self, n_qubits, n_layers, **kwargs):
+            super().__init__(n_qubits)
             self.n_layers = n_layers
-            
             # Define weights as torch.nn.Parameters
-            self.qlayer_weights = nn.Parameter(
+            self.weights = nn.Parameter(
                 torch.rand((n_layers, n_qubits, 3))
             )
-            
-            # Post-processing layer
-            self.fc = nn.Linear(n_qubits, n_actions)
 
-        def _circuit(self, inputs, weights):
+        def forward(self, inputs):
             # inputs shape: (batch_size, n_qubits)
-            # weights shape: (n_layers, n_qubits, 3)
-            
-            # 1. Create the circuit
-            c = tc.Circuit(self.n_qubits)
-            
             # 2. AngleEmbedding
             for i in range(self.n_qubits):
-                c.ry(i, theta=inputs[i]) # Batch-wise encoding
-            
+                self.ry(i, theta=inputs[..., i])
+
             # 3. Variational Layers
             for l in range(self.n_layers):
                 for i in range(self.n_qubits):
-                    c.rz(i, theta=weights[l, i, 0]) # phi
-                    c.ry(i, theta=weights[l, i, 1]) # theta
-                    c.rz(i, theta=weights[l, i, 2]) # omega
+                    self.rz(i, theta=self.weights[l, i, 0]) # phi
+                    self.ry(i, theta=self.weights[l, i, 1]) # theta
+                    self.rz(i, theta=self.weights[l, i, 2]) # omega
                 for i in range(self.n_qubits - 1):
-                    c.cz(i, i + 1)
-            
+                    self.cz(i, i + 1)
+
             # 4. Measurements
-            # This returns a tensor of shape (batch_size, n_qubits)
-            return tc.backend.stack([c.expectation_ps(z=[i]) for i in range(self.n_qubits)], axis=0)
+            # Stack expectation values along axis=1 to get (batch_size, n_qubits)
+            return tc.stack([self.expectation_ps(z=[i]) for i in range(self.n_qubits)], axis=1)
+
+    # --- Main Model Class for Basic DQN ---
+    class TensorCircuitBasicDQN(nn.Module):
+        def __init__(self, n_qubits, n_layers, n_actions, **kwargs):
+            super().__init__()
+            self.q_layer = BasicCircuitNG(n_qubits, n_layers, **kwargs)
+            self.fc = nn.Linear(n_qubits, n_actions)
 
         def forward(self, x):
-            # TensorCircuit's PyTorch backend automatically handles
-            # batching and differentiation (backprop/adjoint).
-            # It *should* keep the tensor on the 'mps' device.
-            vmap_circuit = tc.backend.vmap(self._circuit, vectorized_argnums=(0,))
-            x_cpu = x.cpu()  # Ensure input is on CPU for TensorCircuit
-            weights_cpu = self.qlayer_weights.cpu()  # Ensure weights are on CPU
-            q_out_cpu = vmap_circuit(x_cpu, weights_cpu)
-            return self.fc(q_out_cpu.real.to(self.fc.weight.device))
+            # We move input to CPU for tc-ng/mps compatibility
+            q_out = self.q_layer(x.cpu())
+            # We still take .real for MPS compatibility
+            return self.fc(q_out.real.to(self.fc.weight.device))
 
+    # --- Keras-style Circuit for Hybrid DQN ---
+    class HybridCircuitNG(tc.Circuit):
+        def __init__(self, n_qubits, n_layers, **kwargs):
+            super().__init__(n_qubits)
+            self.n_layers = n_layers
+            self.weights = nn.Parameter(
+                torch.rand((n_layers, n_qubits, 3))
+            )
+
+        def forward(self, inputs):
+            # inputs shape: (batch_size, n_qubits)
+            for l in range(self.n_layers):
+                # Data re-uploading
+                for i in range(self.n_qubits):
+                    self.ry(i, theta=inputs[..., i] * np.pi)
+                
+                # Variational layer
+                for i in range(self.n_qubits):
+                    self.rz(i, theta=self.weights[l, i, 0]) # phi
+                    self.ry(i, theta=self.weights[l, i, 1]) # theta
+                    self.rz(i, theta=self.weights[l, i, 2]) # omega
+                
+                # Entangling layer
+                for i in range(self.n_qubits - 1):
+                    self.cz(i, i + 1)
+            
+            # Final encoding
+            for i in range(self.n_qubits):
+                self.ry(i, theta=inputs[..., i] * np.pi)
+
+            return tc.stack([self.expectation_ps(z=[i]) for i in range(self.n_qubits)], axis=1)
+
+    # --- Main Model Class for Hybrid DQN ---
     class TensorCircuitHybridDQN(nn.Module):
-        """Hybrid approach implemented in TensorCircuit for 'backprop'"""
         def __init__(self, input_dim, n_qubits, n_layers, n_actions, 
                      encoder_hidden_dim, decoder_hidden_dim, 
-                     grad_method_config, **kwargs):
+                     **kwargs):
             super().__init__()
-            self.n_qubits = n_qubits
-            self.n_layers = n_layers
-
             self.encoder = nn.Sequential(
                 nn.Linear(input_dim, encoder_hidden_dim),
                 nn.ReLU(),
                 nn.Linear(encoder_hidden_dim, n_qubits),
                 nn.Tanh()
             )
-            
-            # Define weights as torch.nn.Parameters
-            self.qlayer_weights = nn.Parameter(
-                torch.rand((n_layers, n_qubits, 3))
-            )
-
+            self.q_layer = HybridCircuitNG(n_qubits, n_layers, **kwargs)
             self.decoder = nn.Sequential(
                 nn.Linear(n_qubits, decoder_hidden_dim),
                 nn.ReLU(),
                 nn.Linear(decoder_hidden_dim, n_actions)
             )
 
-        def _circuit(self, inputs, weights):
-            # inputs shape: (batch_size, n_qubits)
-            # weights shape: (n_layers, n_qubits, 3)
-            
-            c = tc.Circuit(self.n_qubits)
-            
-            for l in range(self.n_layers):
-                # Data re-uploading
-                for i in range(self.n_qubits):
-                    c.ry(i, theta=inputs[i] * np.pi)
-                
-                # Variational layer
-                for i in range(self.n_qubits):
-                    c.rz(i, theta=weights[l, i, 0]) # phi
-                    c.ry(i, theta=weights[l, i, 1]) # theta
-                    c.rz(i, theta=weights[l, i, 2]) # omega
-                
-                # Entangling layer
-                for i in range(self.n_qubits - 1):
-                    c.cz(i, i + 1)
-            
-            # Final encoding
-            for i in range(self.n_qubits):
-                c.ry(i, theta=inputs[i] * np.pi)
-
-            return tc.backend.stack([c.expectation_ps(z=[i]) for i in range(self.n_qubits)], axis=0)
-
         def forward(self, x):
             encoded = self.encoder(x)
-            vmap_circuit = tc.backend.vmap(self._circuit, vectorized_argnums=(0,))
-            encoded_cpu = encoded.cpu()  # Ensure input is on CPU for TensorCircuit
-            weights_cpu = self.qlayer_weights.cpu()  # Ensure weights are on CPU
-            q_out_cpu = vmap_circuit(encoded_cpu, weights_cpu)
-            return self.decoder(q_out_cpu.real.to(self.decoder[0].weight.device))
+            # Move input to CPU for tc-ng/mps compatibility
+            q_out = self.q_layer(encoded.cpu())
+            # We still take .real for MPS compatibility
+            return self.decoder(q_out.real.to(self.decoder[0].weight.device))
+
 else:
     # Create dummy classes if TensorCircuit is not installed
     class TensorCircuitBasicDQN(nn.Module):
