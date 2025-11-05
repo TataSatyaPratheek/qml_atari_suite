@@ -151,74 +151,98 @@ if TENSORCIRCUIT_LOADED:
         def __init__(self, n_qubits, n_layers, **kwargs):
             super().__init__(n_qubits)
             self.n_layers = n_layers
-            # Define weights as torch.nn.Parameters
-            self.weights = nn.Parameter(
-                torch.rand((n_layers, n_qubits, 3))
-            )
 
-        def forward(self, inputs):
+        def forward(self, inputs, weights):
             # inputs shape: (batch_size, n_qubits)
+            # weights shape: (n_layers, n_qubits, 3)
             # 2. AngleEmbedding
-            for i in range(self.n_qubits):
+            for i in range(self._nqubits):
                 self.ry(i, theta=inputs[..., i])
 
             # 3. Variational Layers
             for l in range(self.n_layers):
-                for i in range(self.n_qubits):
-                    self.rz(i, theta=self.weights[l, i, 0]) # phi
-                    self.ry(i, theta=self.weights[l, i, 1]) # theta
-                    self.rz(i, theta=self.weights[l, i, 2]) # omega
-                for i in range(self.n_qubits - 1):
+                for i in range(self._nqubits):
+                    self.rz(i, theta=weights[l, i, 0]) # phi
+                    self.ry(i, theta=weights[l, i, 1]) # theta
+                    self.rz(i, theta=weights[l, i, 2]) # omega
+                for i in range(self._nqubits - 1):
                     self.cz(i, i + 1)
 
             # 4. Measurements
-            # Stack expectation values along axis=1 to get (batch_size, n_qubits)
-            return tc.stack([self.expectation_ps(z=[i]) for i in range(self.n_qubits)], axis=1)
+            # Collect expectation values
+            expectations = []
+            for i in range(self._nqubits):
+                expectations.append(self.expectation_ps(z=[i]))
+            
+            # Stack along the last axis to get (batch_size, n_qubits)
+            return tc.backend.stack(expectations, axis=-1)
 
     # --- Main Model Class for Basic DQN ---
     class TensorCircuitBasicDQN(nn.Module):
         def __init__(self, n_qubits, n_layers, n_actions, **kwargs):
             super().__init__()
-            self.q_layer = BasicCircuitNG(n_qubits, n_layers, **kwargs)
+            self.n_qubits = n_qubits
+            self.n_layers = n_layers
+            self.n_actions = n_actions
+            
+            # Store weights as nn.Parameter for the optimizer
+            self.weights = nn.Parameter(
+                torch.rand((n_layers, n_qubits, 3))
+            )
+            
             self.fc = nn.Linear(n_qubits, n_actions)
 
         def forward(self, x):
             # We move input to CPU for tc-ng/mps compatibility
-            q_out = self.q_layer(x.cpu())
+            x_cpu = x.cpu()
+            weights_cpu = self.weights.cpu()
+            
+            # Define the circuit computation as a function for vmapping
+            def circuit_forward(inputs):
+                circuit = BasicCircuitNG(self.n_qubits, self.n_layers)
+                return circuit.forward(inputs, weights_cpu)
+            
+            # Vmap the circuit forward function
+            vmap_circuit = tc.backend.vmap(circuit_forward, vectorized_argnums=(0,))
+            q_out_cpu = vmap_circuit(x_cpu)
+            
             # We still take .real for MPS compatibility
-            return self.fc(q_out.real.to(self.fc.weight.device))
+            return self.fc(q_out_cpu.real.to(self.fc.weight.device))
 
     # --- Keras-style Circuit for Hybrid DQN ---
     class HybridCircuitNG(tc.Circuit):
         def __init__(self, n_qubits, n_layers, **kwargs):
             super().__init__(n_qubits)
             self.n_layers = n_layers
-            self.weights = nn.Parameter(
-                torch.rand((n_layers, n_qubits, 3))
-            )
 
-        def forward(self, inputs):
+        def forward(self, inputs, weights):
             # inputs shape: (batch_size, n_qubits)
+            # weights shape: (n_layers, n_qubits, 3)
             for l in range(self.n_layers):
                 # Data re-uploading
-                for i in range(self.n_qubits):
+                for i in range(self._nqubits):
                     self.ry(i, theta=inputs[..., i] * np.pi)
                 
                 # Variational layer
-                for i in range(self.n_qubits):
-                    self.rz(i, theta=self.weights[l, i, 0]) # phi
-                    self.ry(i, theta=self.weights[l, i, 1]) # theta
-                    self.rz(i, theta=self.weights[l, i, 2]) # omega
+                for i in range(self._nqubits):
+                    self.rz(i, theta=weights[l, i, 0]) # phi
+                    self.ry(i, theta=weights[l, i, 1]) # theta
+                    self.rz(i, theta=weights[l, i, 2]) # omega
                 
                 # Entangling layer
-                for i in range(self.n_qubits - 1):
+                for i in range(self._nqubits - 1):
                     self.cz(i, i + 1)
             
             # Final encoding
-            for i in range(self.n_qubits):
+            for i in range(self._nqubits):
                 self.ry(i, theta=inputs[..., i] * np.pi)
 
-            return tc.stack([self.expectation_ps(z=[i]) for i in range(self.n_qubits)], axis=1)
+            # Collect expectation values
+            expectations = []
+            for i in range(self._nqubits):
+                expectations.append(self.expectation_ps(z=[i]))
+            
+            return tc.backend.stack(expectations, axis=-1)
 
     # --- Main Model Class for Hybrid DQN ---
     class TensorCircuitHybridDQN(nn.Module):
@@ -226,13 +250,21 @@ if TENSORCIRCUIT_LOADED:
                      encoder_hidden_dim, decoder_hidden_dim, 
                      **kwargs):
             super().__init__()
+            self.n_qubits = n_qubits
+            self.n_layers = n_layers
+            
             self.encoder = nn.Sequential(
                 nn.Linear(input_dim, encoder_hidden_dim),
                 nn.ReLU(),
                 nn.Linear(encoder_hidden_dim, n_qubits),
                 nn.Tanh()
             )
-            self.q_layer = HybridCircuitNG(n_qubits, n_layers, **kwargs)
+            
+            # Store weights as nn.Parameter for the optimizer
+            self.weights = nn.Parameter(
+                torch.rand((n_layers, n_qubits, 3))
+            )
+            
             self.decoder = nn.Sequential(
                 nn.Linear(n_qubits, decoder_hidden_dim),
                 nn.ReLU(),
@@ -242,9 +274,20 @@ if TENSORCIRCUIT_LOADED:
         def forward(self, x):
             encoded = self.encoder(x)
             # Move input to CPU for tc-ng/mps compatibility
-            q_out = self.q_layer(encoded.cpu())
+            encoded_cpu = encoded.cpu()
+            weights_cpu = self.weights.cpu()
+            
+            # Define the circuit computation as a function for vmapping
+            def circuit_forward(inputs):
+                circuit = HybridCircuitNG(self.n_qubits, self.n_layers)
+                return circuit.forward(inputs, weights_cpu)
+            
+            # Vmap the circuit forward function
+            vmap_circuit = tc.backend.vmap(circuit_forward, vectorized_argnums=(0,))
+            q_out_cpu = vmap_circuit(encoded_cpu)
+            
             # We still take .real for MPS compatibility
-            return self.decoder(q_out.real.to(self.decoder[0].weight.device))
+            return self.decoder(q_out_cpu.real.to(self.decoder[0].weight.device))
 
 else:
     # Create dummy classes if TensorCircuit is not installed
